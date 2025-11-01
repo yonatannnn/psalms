@@ -1,0 +1,37 @@
+name: mezmure_dawit
+description: "መዝሙረ ዳዊት - Psalms of David in Amharic"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.3
+  flutter_bloc: ^8.1.6
+  equatable: ^2.0.5
+  intl: ^0.20.2
+  abushakir: ^1.0.0
+  shared_preferences: ^2.2.2
+  http: ^1.1.0
+  flutter_localizations:
+    sdk: flutter
+  google_fonts: ^6.3.2
+  share_plus: ^10.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4  # Move this to dev_dependencies
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/md.jpg
+    - assets/david2.jpg
