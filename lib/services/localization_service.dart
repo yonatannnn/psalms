@@ -1,4 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class LocalizationService {
   static const String _languageKey = 'selected_language';
@@ -33,6 +35,24 @@ class LocalizationService {
     _currentLanguage = language;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_languageKey, language);
+    // Also save language preference to Firestore for push notifications
+    await _saveLanguageToFirestore(language);
+  }
+  
+  Future<void> _saveLanguageToFirestore(String language) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .update({
+          'language': language,
+        });
+      }
+    } catch (e) {
+      print('Error saving language to Firestore: $e');
+    }
   }
   
   Future<void> setCalendar(String calendar) async {
@@ -129,6 +149,8 @@ class LocalizationService {
       'share_verse': 'Share Verse',
       'share_chapter_message': 'Share this chapter',
       'share_verse_message': 'Share this verse',
+      'dark_mode': 'Dark Mode',
+      'light_mode': 'Light Mode',
     },
     'am': {
       'app_title': 'መዝሙረ ዳዊት',
@@ -216,6 +238,8 @@ class LocalizationService {
       'share_verse': 'አንቀፅ አጋራ',
       'share_chapter_message': 'ይህንን ምዕራፍ አጋራ',
       'share_verse_message': 'ይህንን አንቀፅ አጋራ',
+      'dark_mode': 'የጨለማ ሁነታ',
+      'light_mode': 'የብርሃን ሁነታ',
     },
   };
   
