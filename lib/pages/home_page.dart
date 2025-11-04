@@ -12,6 +12,7 @@ import '../services/psalms_data_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/theme_service.dart';
 import '../services/font_size_service.dart';
+import '../services/sunday_prayers_service.dart';
 import 'daily_chapter_preferences_page.dart';
 import 'profile_page.dart';
 import 'admin_page.dart';
@@ -133,10 +134,11 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       backgroundColor: _isLoading 
-          ? Colors.black 
-          : (Theme.of(context).brightness == Brightness.dark ? Colors.black87 : null),
+          ? (isDark ? Colors.black : Colors.white)
+          : (isDark ? Colors.black87 : null),
       appBar: AppBar(
         title: Text(LocalizationService.instance.translate('app_title')),
         actions: [
@@ -388,10 +390,10 @@ class _HomePageState extends State<HomePage> {
       body: SafeArea(
         child: _isLoading
             ? Container(
-                color: Colors.black,
-                child: const Center(
+                color: isDark ? Colors.black : Colors.white,
+                child: Center(
                   child: CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    valueColor: AlwaysStoppedAnimation<Color>(isDark ? Colors.white : Colors.deepPurple),
                   ),
                 ),
               )
@@ -410,6 +412,7 @@ class _HomePageState extends State<HomePage> {
   Widget _buildSetupPrompt() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(24.0),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -468,15 +471,44 @@ class _HomePageState extends State<HomePage> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => ReadingPreferencesPage(user: widget.user),
-                            ),
-                          );
+                        onPressed: () async {
+                          // Check if today is Sunday and if Sunday preferences are not set
+                          final now = DateTime.now();
+                          final isSunday = now.weekday == 7;
+                          final hasSundayPrayers = await SundayPrayersService().hasSundayPrayers(widget.user.id);
+                          
+                          if (isSunday && !hasSundayPrayers) {
+                            // Navigate to Sunday preferences page
+                            final result = await Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => SundayPrayersPage(user: widget.user),
+                              ),
+                            );
+                            if (result == true && mounted) {
+                              await _loadTodaysPlan();
+                            }
+                          } else {
+                            // Navigate to regular preferences page
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => ReadingPreferencesPage(user: widget.user),
+                              ),
+                            );
+                          }
                         },
-                        icon: const Icon(Icons.settings),
-                        label: Text(LocalizationService.instance.translate('set_up_reading_preferences')),
+                        icon: Icon(DateTime.now().weekday == 7 ? Icons.church : Icons.settings),
+                        label: FutureBuilder<bool>(
+                          future: SundayPrayersService().hasSundayPrayers(widget.user.id),
+                          builder: (context, snapshot) {
+                            final isSunday = DateTime.now().weekday == 7;
+                            final hasSundayPrayers = snapshot.data ?? false;
+                            return Text(
+                              isSunday && !hasSundayPrayers
+                                  ? LocalizationService.instance.translate('set_sunday_prayers')
+                                  : LocalizationService.instance.translate('set_up_reading_preferences')
+                            );
+                          },
+                        ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.deepPurple,
                           foregroundColor: Colors.white,
@@ -504,6 +536,7 @@ class _HomePageState extends State<HomePage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -575,9 +608,10 @@ class _HomePageState extends State<HomePage> {
                     // Sunday - Prayer topics
                     Text(
                       LocalizationService.instance.translate('prayer_topics'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white.withOpacity(0.7) : Colors.deepPurple,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -590,12 +624,17 @@ class _HomePageState extends State<HomePage> {
                           Expanded(
                             child: Text(
                               topic,
-                              style: const TextStyle(fontSize: 14),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: isDark ? Colors.white70 : Colors.black87,
+                              ),
                             ),
                           ),
                         ],
                       ),
                     )),
+                    // Add spacing to ensure content is scrollable for refresh
+                    const SizedBox(height: 24),
                   ] else ...[
                     // Monday-Saturday - Psalm chapters
                     Text(
@@ -676,6 +715,8 @@ class _HomePageState extends State<HomePage> {
           
           // Removed action buttons (moved to Drawer)
           // Quick access: show today's psalms snippets
+          // For Sunday, add extra spacing at bottom to ensure refresh works
+          if (plan.isSunday) const SizedBox(height: 100),
           ...plan.chapters.map((ch) {
             final lang = _currentLanguage;
             final isAm = lang == 'am';

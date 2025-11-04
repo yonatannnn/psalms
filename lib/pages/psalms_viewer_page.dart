@@ -144,20 +144,21 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
   }
 
   Widget _buildBody() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     if (_isLoading) {
       return Container(
-        color: Colors.black,
+        color: isDark ? Colors.black : Colors.white,
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(isDark ? Colors.white : Colors.deepPurple),
               ),
               const SizedBox(height: 16),
               Text(
                 'Loading Psalms...',
-                style: TextStyle(color: Colors.white),
+                style: TextStyle(color: isDark ? Colors.white : Colors.black87),
               ),
             ],
           ),
