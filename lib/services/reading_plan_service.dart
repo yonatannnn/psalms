@@ -25,11 +25,24 @@ class ReadingPlanService {
         // Sunday - get prayer topics
         final sundayPrayers = await _sundayPrayersService.getSundayPrayers(userId);
         if (sundayPrayers == null) return null;
-        
-        // Calculate which week of the month (1-4)
-        final weekOfMonth = ((now.day - 1) ~/ 7) + 1;
-        final currentWeek = weekOfMonth > 4 ? 4 : weekOfMonth;
-        
+
+        // Cycle through all configured weeks based on Sundays since start date
+        final totalWeeks = sundayPrayers.weeklyPrayers.length;
+        if (totalWeeks == 0) return null;
+
+        // Count Sundays since start date
+        final DateTime a = DateTime(now.year, now.month, now.day);
+        final DateTime b = DateTime(
+          preferences.startDate.year,
+          preferences.startDate.month,
+          preferences.startDate.day,
+        );
+        final int daysSinceStart = a.difference(b).inDays;
+        final int sundaysSinceStart = daysSinceStart >= 0 ? (daysSinceStart ~/ 7) : 0;
+
+        // Cycle: week 1, 2, ..., totalWeeks, 1, 2, ...
+        final currentWeek = (sundaysSinceStart % totalWeeks) + 1;
+
         return TodaysReadingPlan(
           date: now,
           ethiopianDate: currentEthiopian,
