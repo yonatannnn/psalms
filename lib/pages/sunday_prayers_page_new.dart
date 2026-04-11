@@ -180,7 +180,7 @@ class _SundayPrayersPageState extends State<SundayPrayersPage> {
               // Week Count Selection (if not selected yet)
               if (!_hasSelectedWeekCount) ...[
                 Container(
-                  backgroundColor: isDark ? Colors.grey.shade900 : null,
+                  color: isDark ? Colors.grey.shade900 : null,
                   padding: const EdgeInsets.all(20),
                   child: Column(
                     children: [

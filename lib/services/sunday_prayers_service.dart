@@ -1,23 +1,38 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/sunday_prayers_model.dart';
+import 'local_storage_service.dart';
 
 class SundayPrayersService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final LocalStorageService _local = LocalStorageService.instance;
 
-  // Save Sunday prayers configuration
+  // Save Sunday prayers — local-first, then sync to Firestore
   Future<void> saveSundayPrayers(SundayPrayersModel prayers) async {
+    // Save locally first
+    await _local.saveSundayPrayers(prayers);
+
+    // Sync to Firestore in background
     try {
       await _firestore
           .collection('sunday_prayers')
           .doc(prayers.userId)
           .set(prayers.toJson());
-    } catch (e) {
-      throw Exception('Failed to save Sunday prayers: $e');
+    } catch (_) {
+      // Offline — local save is sufficient
     }
   }
 
-  // Get Sunday prayers for a user
+  // Get Sunday prayers — local-first, falls back to Firestore
   Future<SundayPrayersModel?> getSundayPrayers(String userId) async {
+    // Try local cache first
+    final cached = await _local.getSundayPrayers(userId);
+    if (cached != null) {
+      // Background sync
+      _syncFromFirestore(userId);
+      return cached;
+    }
+
+    // No local data — try Firestore
     try {
       final DocumentSnapshot doc = await _firestore
           .collection('sunday_prayers')
@@ -25,45 +40,85 @@ class SundayPrayersService {
           .get();
 
       if (doc.exists) {
-        return SundayPrayersModel.fromJson(doc.data() as Map<String, dynamic>);
+        final prayers = SundayPrayersModel.fromJson(
+            doc.data() as Map<String, dynamic>);
+        await _local.saveSundayPrayers(prayers);
+        return prayers;
       }
       return null;
-    } catch (e) {
-      throw Exception('Failed to get Sunday prayers: $e');
+    } catch (_) {
+      return null;
     }
   }
 
-  // Update Sunday prayers
+  // Update Sunday prayers — local-first, then sync
   Future<void> updateSundayPrayers(SundayPrayersModel prayers) async {
+    final updatedPrayers = prayers.copyWith(updatedAt: DateTime.now());
+
+    // Save locally first
+    await _local.saveSundayPrayers(updatedPrayers);
+
+    // Sync to Firestore in background
     try {
-      final updatedPrayers = prayers.copyWith(updatedAt: DateTime.now());
       await _firestore
           .collection('sunday_prayers')
           .doc(prayers.userId)
           .update(updatedPrayers.toJson());
-    } catch (e) {
-      throw Exception('Failed to update Sunday prayers: $e');
+    } catch (_) {
+      try {
+        await _firestore
+            .collection('sunday_prayers')
+            .doc(prayers.userId)
+            .set(updatedPrayers.toJson());
+      } catch (_) {
+        // Offline — local save is sufficient
+      }
     }
   }
 
-  // Check if user has Sunday prayers configured
+  // Check if user has Sunday prayers — local-first
   Future<bool> hasSundayPrayers(String userId) async {
+    final cached = await _local.getSundayPrayers(userId);
+    if (cached != null) return true;
+
     try {
       final DocumentSnapshot doc = await _firestore
           .collection('sunday_prayers')
           .doc(userId)
           .get();
+      if (doc.exists) {
+        final prayers = SundayPrayersModel.fromJson(
+            doc.data() as Map<String, dynamic>);
+        await _local.saveSundayPrayers(prayers);
+      }
       return doc.exists;
-    } catch (e) {
-      throw Exception('Failed to check Sunday prayers: $e');
+    } catch (_) {
+      return false;
     }
+  }
+
+  // Background sync
+  void _syncFromFirestore(String userId) {
+    Future.microtask(() async {
+      try {
+        final doc = await _firestore
+            .collection('sunday_prayers')
+            .doc(userId)
+            .get();
+        if (doc.exists) {
+          final prayers = SundayPrayersModel.fromJson(
+              doc.data() as Map<String, dynamic>);
+          await _local.saveSundayPrayers(prayers);
+        }
+      } catch (_) {}
+    });
   }
 
   // Get Ethiopian Orthodox prayer topics
   static List<String> getEthiopianPrayerTopics() {
     return [
       '1. የሙሴ ጸሎት',
-      '2. የሃና ጸሎት', 
+      '2. የሃና ጸሎት',
       '3. የሕዝቅያስ ጸሎት',
       '4. የሚናሴ ጸሎት',
       '5. የዮናስ ጸሎት',
