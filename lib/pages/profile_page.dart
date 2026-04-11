@@ -36,8 +36,9 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _prefillUsername() async {
     try {
+      // getCurrentUserData is now local-first, works offline
       final user = await AuthService().getCurrentUserData();
-      if (user != null) {
+      if (user != null && mounted) {
         setState(() {
           _usernameController.text = user.username;
         });

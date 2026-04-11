@@ -1,10 +1,12 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
+import 'local_storage_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final LocalStorageService _local = LocalStorageService.instance;
 
   // Get current user
   User? get currentUser => _auth.currentUser;
@@ -12,16 +14,14 @@ class AuthService {
   // Auth state changes stream
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
-  // Sign up with username and password
+  // Sign up with username and password (requires internet)
   Future<UserModel?> signUp({
     required String username,
     required String password,
   }) async {
     try {
-      // Create user with Firebase Auth using username as email
-      // We'll use a dummy email format since Firebase requires email
       final String email = '$username@mezmuredawit.local';
-      
+
       final UserCredential result = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
@@ -29,11 +29,10 @@ class AuthService {
 
       final User? user = result.user;
       if (user != null) {
-        // Create user document in Firestore
         final UserModel userModel = UserModel(
           id: user.uid,
           username: username,
-          password: password, // Note: In production, don't store plain password
+          password: password,
           authEmail: email,
           createdAt: DateTime.now(),
           lastLoginAt: DateTime.now(),
@@ -44,6 +43,9 @@ class AuthService {
             .doc(user.uid)
             .set(userModel.toJson());
 
+        // Cache user data locally
+        await _local.saveUser(userModel);
+
         return userModel;
       }
       return null;
@@ -52,13 +54,12 @@ class AuthService {
     }
   }
 
-  // Sign in with username and password
+  // Sign in with username and password (requires internet)
   Future<UserModel?> signIn({
     required String username,
     required String password,
   }) async {
     try {
-      // Look up user by username in Firestore to get authEmail
       final QuerySnapshot qs = await _firestore
           .collection('users')
           .where('username', isEqualTo: username)
@@ -78,7 +79,6 @@ class AuthService {
 
       final User? user = result.user;
       if (user != null) {
-        // Get user data from Firestore
         final DocumentSnapshot doc = await _firestore
             .collection('users')
             .doc(user.uid)
@@ -86,14 +86,20 @@ class AuthService {
 
         if (doc.exists) {
           final UserModel userModel = UserModel.fromJson(doc.data() as Map<String, dynamic>);
-          
-          // Update last login time
-          await _firestore
+
+          // Update last login time (fire-and-forget)
+          _firestore
               .collection('users')
               .doc(user.uid)
-              .update({'lastLoginAt': DateTime.now().toIso8601String()});
+              .update({'lastLoginAt': DateTime.now().toIso8601String()})
+              .catchError((_) {});
 
-          return userModel.copyWith(lastLoginAt: DateTime.now());
+          final updated = userModel.copyWith(lastLoginAt: DateTime.now());
+
+          // Cache user data locally
+          await _local.saveUser(updated);
+
+          return updated;
         }
       }
       return null;
@@ -105,33 +111,63 @@ class AuthService {
   // Sign out
   Future<void> signOut() async {
     try {
+      await _local.clearUser();
       await _auth.signOut();
     } catch (e) {
       throw Exception('Sign out failed: $e');
     }
   }
 
-  // Get current user data
+  // Get current user data — local-first, falls back to Firestore, then syncs
   Future<UserModel?> getCurrentUserData() async {
     try {
       final User? user = currentUser;
-      if (user != null) {
-        final DocumentSnapshot doc = await _firestore
-            .collection('users')
-            .doc(user.uid)
-            .get();
+      if (user == null) return null;
 
-        if (doc.exists) {
-          return UserModel.fromJson(doc.data() as Map<String, dynamic>);
-        }
+      // Try local cache first
+      final cached = await _local.getUser();
+      if (cached != null && cached.id == user.uid) {
+        // Sync from Firestore in background to keep local cache fresh
+        _syncUserFromFirestore(user.uid);
+        return cached;
+      }
+
+      // No cache — fetch from Firestore
+      final DocumentSnapshot doc = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (doc.exists) {
+        final userModel = UserModel.fromJson(doc.data() as Map<String, dynamic>);
+        await _local.saveUser(userModel);
+        return userModel;
       }
       return null;
     } catch (e) {
+      // If Firestore fails (offline), return cached data
+      final cached = await _local.getUser();
+      if (cached != null) return cached;
       throw Exception('Failed to get user data: $e');
     }
   }
 
-  // Check if username is available
+  // Background sync: fetch latest user data from Firestore and update cache
+  void _syncUserFromFirestore(String uid) {
+    Future.microtask(() async {
+      try {
+        final doc = await _firestore.collection('users').doc(uid).get();
+        if (doc.exists) {
+          final userModel = UserModel.fromJson(doc.data() as Map<String, dynamic>);
+          await _local.saveUser(userModel);
+        }
+      } catch (_) {
+        // Silently fail — local cache is still valid
+      }
+    });
+  }
+
+  // Check if username is available (requires internet)
   Future<bool> isUsernameAvailable(String username, {String? excludeUserId}) async {
     try {
       final QuerySnapshot result = await _firestore
@@ -141,7 +177,6 @@ class AuthService {
           .get();
 
       if (result.docs.isEmpty) return true;
-      // If only our own document matches, it's available
       if (excludeUserId != null &&
           result.docs.every((d) => d.id == excludeUserId)) {
         return true;
@@ -152,8 +187,12 @@ class AuthService {
     }
   }
 
-  // Track daily app open: increments count only once per day
+  // Track daily app open — local-first, syncs to Firestore in background
   Future<void> trackDailyOpen(String userId) async {
+    // Always track locally
+    await _local.trackDailyOpen();
+
+    // Try to sync to Firestore in background
     try {
       final docRef = _firestore.collection('users').doc(userId);
       final snap = await docRef.get();
@@ -168,11 +207,12 @@ class AuthService {
           'lastOpenDate': today,
         });
       }
-    } catch (e) {
-      // Do not crash app on analytics write failure
+    } catch (_) {
+      // Offline — local tracking still works
     }
   }
-  // Update username and/or password (requires current password)
+
+  // Update username and/or password (requires internet)
   Future<void> updateCredentials({
     String? newUsername,
     String? newPassword,
@@ -181,8 +221,6 @@ class AuthService {
     try {
       final user = _auth.currentUser;
       if (user == null) throw Exception('Not authenticated');
-      // Reauthenticate
-      // Email is derived from current username in Firestore
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
       if (!userDoc.exists) throw Exception('User profile not found');
       final currentUsername = (userDoc.data() as Map<String, dynamic>)['username'] as String;
@@ -190,21 +228,16 @@ class AuthService {
       final cred = EmailAuthProvider.credential(email: currentEmail, password: currentPassword);
       await user.reauthenticateWithCredential(cred);
 
-      // Update password
       if (newPassword != null && newPassword.isNotEmpty) {
         await user.updatePassword(newPassword);
       }
 
-      // Normalize proposed username
       final normalized = newUsername?.trim();
-      // Update username in Firestore; keep authEmail immutable to avoid provider restrictions
       if (normalized != null && normalized.isNotEmpty && normalized != currentUsername) {
-        // Simple validation for username -> email mapping
         final valid = RegExp(r'^[A-Za-z0-9_.-]{3,}$').hasMatch(normalized);
         if (!valid) {
           throw Exception('invalid-username');
         }
-        // Check availability
         final available = await isUsernameAvailable(normalized, excludeUserId: user.uid);
         if (!available) throw Exception('Username is already taken');
         await _firestore.collection('users').doc(user.uid).update({
@@ -213,6 +246,13 @@ class AuthService {
         });
       } else if (newPassword != null && newPassword.isNotEmpty) {
         await _firestore.collection('users').doc(user.uid).update({'password': newPassword});
+      }
+
+      // Update local cache after successful credential update
+      final updatedDoc = await _firestore.collection('users').doc(user.uid).get();
+      if (updatedDoc.exists) {
+        final updatedUser = UserModel.fromJson(updatedDoc.data() as Map<String, dynamic>);
+        await _local.saveUser(updatedUser);
       }
     } on FirebaseAuthException catch (e) {
       throw Exception(e.code);
