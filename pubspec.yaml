@@ -23,6 +23,12 @@ dependencies:
     sdk: flutter
   google_fonts: ^6.3.2
   share_plus: ^10.1.2
+  firebase_messaging: ^15.1.3
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
+  just_audio: ^0.10.5
+  path_provider: ^2.1.6
+  just_audio_background: ^0.0.1-beta.17
 
 dev_dependencies:
   flutter_test:
