@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../services/psalms_data_service.dart';
 import '../services/localization_service.dart';
 import '../services/font_size_service.dart';
+import '../services/psalm_audio_service.dart';
+import '../widgets/psalm_audio_controls.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart' deferred as share_plus;
 
@@ -126,6 +128,71 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
     share_plus.Share.share(shareText.toString(), subject: isAmharic ? 'መዝሙር ${psalm.chapter}' : 'Psalm ${psalm.chapter}');
   }
 
+  void _showVerseShareMenu(BuildContext context, int chapter, int verseNum, String verseText, bool isDark) {
+    final isAmharic = LocalizationService.instance.currentLanguage == 'am';
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? Colors.grey.shade900 : Colors.white,
+      builder: (context) => SafeArea(
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                isAmharic ? 'መዝሙር $chapter:$verseNum' : 'Psalm $chapter:$verseNum',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.grey.shade900 : Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  verseText,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              ListTile(
+                leading: const Icon(Icons.share),
+                title: Text(isAmharic ? 'ወደ ውጭ አጋራ' : 'Share Externally'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _shareVerseExternal(chapter, verseNum, verseText);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareVerseExternal(int chapter, int verseNum, String verseText) async {
+    await _loadSharePackage();
+    
+    final isAmharic = LocalizationService.instance.currentLanguage == LocalizationService.amharic;
+    final shareText = isAmharic 
+        ? 'መዝሙር $chapter:$verseNum\n\n$verseNum. $verseText'
+        : 'Psalm $chapter:$verseNum\n\n$verseNum. $verseText';
+    
+    share_plus.Share.share(
+      shareText,
+      subject: isAmharic ? 'መዝሙር $chapter:$verseNum' : 'Psalm $chapter:$verseNum',
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +203,7 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
       appBar: AppBar(
         title: Text(widget.title),
       ),
-      backgroundColor: isDark ? Colors.black87 : null,
+      backgroundColor: isDark ? const Color(0xFF121212) : null,
       body: SafeArea(
         child: _buildBody(),
       ),
@@ -147,7 +214,7 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     if (_isLoading) {
       return Container(
-        color: isDark ? Colors.black : Colors.white,
+        color: isDark ? const Color(0xFF121212) : Colors.white,
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -244,14 +311,27 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
                     ),
                   ),
                 ),
+                if (isAmharic && PsalmAudioService.instance.isAvailable)
+                  PsalmPlayButton(
+                    from: psalm.chapter,
+                    to: psalm.chapter,
+                    color: isDark ? Colors.white70 : Colors.deepPurple,
+                  ),
                 const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(Icons.share, color: isDark ? Colors.white70 : Colors.deepPurple),
-                  onPressed: () => _shareChapter(psalm),
                   tooltip: LocalizationService.instance.translate('share_chapter'),
+                  onPressed: () => _shareChapter(psalm),
                 ),
               ],
             ),
+            if (isAmharic && PsalmAudioService.instance.isAvailable)
+              PsalmSeekBar(
+                from: psalm.chapter,
+                to: psalm.chapter,
+                color: isDark ? Colors.white : Colors.deepPurple,
+                textColor: isDark ? Colors.white60 : Colors.black54,
+              ),
             const SizedBox(height: 16),
 
             // Psalm Content (render verse number and text in separate columns)
@@ -259,7 +339,7 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDark ? Colors.black : Colors.grey.shade50,
+                color: isDark ? Colors.grey.shade900 : Colors.grey.shade50,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
@@ -306,6 +386,10 @@ class _PsalmsViewerPageState extends State<PsalmsViewerPage> {
                                 _visibleVerseNumbers.add(verseKey);
                               }
                             });
+                          },
+                          onLongPress: () {
+                            if (verseNum == 0) return; // skip header/footer lines
+                            _showVerseShareMenu(context, psalm.chapter, verseNum, e.value, isDark);
                           },
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,

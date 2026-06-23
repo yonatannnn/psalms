@@ -9,6 +9,7 @@ import 'sunday_prayers_page.dart';
 import 'psalms_viewer_page.dart';
 import 'psalms_browser_page.dart';
 import '../services/psalms_data_service.dart';
+import '../services/prayer_data_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/theme_service.dart';
 import '../services/font_size_service.dart';
@@ -16,6 +17,11 @@ import '../services/sunday_prayers_service.dart';
 import 'daily_chapter_preferences_page.dart';
 import 'profile_page.dart';
 import 'admin_page.dart';
+import 'settings_page.dart';
+import '../services/push_notification_service.dart';
+import '../services/psalm_audio_service.dart';
+import '../widgets/psalm_audio_controls.dart';
+import 'audio_range_page.dart';
 
 class HomePage extends StatefulWidget {
   final UserModel user;
@@ -39,9 +45,11 @@ class _HomePageState extends State<HomePage> {
     _initializeLocalization();
     _displayUsername = widget.user.username;
     _loadUserProfile();
-    // Track daily open count
+    // Track daily open count (local-first, syncs in background)
     AuthService().trackDailyOpen(widget.user.id);
     _loadTodaysPlan();
+    // Save FCM token for current user (non-blocking, requires internet)
+    PushNotificationService().saveTokenForCurrentUser().catchError((_) {});
   }
 
   @override
@@ -76,6 +84,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadUserProfile() async {
     try {
+      // getCurrentUserData is now local-first, so this works offline
       final user = await AuthService().getCurrentUserData();
       if (user != null && mounted) {
         setState(() {
@@ -136,9 +145,11 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: _isLoading 
-          ? (isDark ? Colors.black : Colors.white)
-          : (isDark ? Colors.black87 : null),
+      // Soft dark background instead of pure black, so cards stay readable
+      // without a harsh black surround.
+      backgroundColor: _isLoading
+          ? (isDark ? const Color(0xFF121212) : Colors.white)
+          : (isDark ? const Color(0xFF121212) : null),
       appBar: AppBar(
         title: Text(LocalizationService.instance.translate('app_title')),
         actions: [
@@ -180,43 +191,35 @@ class _HomePageState extends State<HomePage> {
                 );
               },
             ),
+            if (PsalmAudioService.instance.isAvailable)
+              ListTile(
+                leading: const Icon(Icons.headphones),
+                title: Text(LocalizationService.instance.currentLanguage == 'am'
+                    ? 'ድምፅ አጫውት'
+                    : 'Play Audio Range'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const AudioRangePage(),
+                    ),
+                  );
+                },
+              ),
             ListTile(
-              leading: const Icon(Icons.tune),
-              title: Text(LocalizationService.instance.currentLanguage == 'am' ? 'በቀን የሚነበቡ ምዕራፎች' : 'Per-specific-day Chapters'),
+              leading: const Icon(Icons.settings),
+              title: Text(LocalizationService.instance.currentLanguage == 'am' ? 'ቅንብሮች' : 'Settings'),
               onTap: () async {
                 Navigator.pop(context);
                 final result = await Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (context) => DailyChapterPreferencesPage(user: widget.user),
+                    builder: (context) => SettingsPage(user: widget.user),
                   ),
                 );
                 if (result == true && mounted) {
+                  await _loadUserProfile();
                   await _loadTodaysPlan();
                 }
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings),
-              title: Text(LocalizationService.instance.translate('edit_preferences')),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => ReadingPreferencesPage(user: widget.user),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.church),
-              title: Text(LocalizationService.instance.translate('set_sunday_prayers')),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => SundayPrayersPage(user: widget.user),
-                  ),
-                );
               },
             ),
             ListTile(
@@ -267,92 +270,17 @@ class _HomePageState extends State<HomePage> {
                             await ThemeService.instance.toggleLightDark();
                           },
                           icon: const Icon(Icons.brightness_6),
-                          label: Text(Theme.of(context).brightness == Brightness.dark ? 'Dark mode' : 'Light mode'),
+                          label: Text(
+                            Theme.of(context).brightness == Brightness.dark
+                                ? LocalizationService.instance.translate('dark_mode')
+                                : LocalizationService.instance.translate('light_mode'),
+                          ),
                           style: TextButton.styleFrom(
                             foregroundColor: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.black87,
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                           ),
                         ),
                       ],
-                    ),
-                  ),
-                  // Font Size Controls
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Column(
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  _currentLanguage == 'am' ? 'የፊደል መጠን' : 'Font Size',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87,
-                                  ),
-                                ),
-                                ValueListenableBuilder<double>(
-                                  valueListenable: FontSizeService.instance.fontSize,
-                                  builder: (context, fontSize, _) {
-                                    return Text(
-                                      fontSize.toInt().toString(),
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.black54,
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                IconButton(
-                                  onPressed: () async {
-                                    await FontSizeService.instance.decreaseFontSize();
-                                  },
-                                  icon: const Icon(Icons.remove_circle_outline),
-                                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.deepPurple,
-                                  tooltip: _currentLanguage == 'am' ? 'አነስ' : 'Decrease',
-                                ),
-                                ValueListenableBuilder<double>(
-                                  valueListenable: FontSizeService.instance.fontSize,
-                                  builder: (context, fontSize, _) {
-                                    final minSize = FontSizeService.instance.minFontSize;
-                                    final maxSize = FontSizeService.instance.maxFontSize;
-                                    return Expanded(
-                                      child: Slider(
-                                        value: fontSize,
-                                        min: minSize,
-                                        max: maxSize,
-                                        divisions: ((maxSize - minSize) / FontSizeService.instance.stepSize).round(),
-                                        label: fontSize.toInt().toString(),
-                                        onChanged: (value) async {
-                                          await FontSizeService.instance.setFontSize(value);
-                                        },
-                                        activeColor: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.deepPurple,
-                                      ),
-                                    );
-                                  },
-                                ),
-                                IconButton(
-                                  onPressed: () async {
-                                    await FontSizeService.instance.increaseFontSize();
-                                  },
-                                  icon: const Icon(Icons.add_circle_outline),
-                                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.deepPurple,
-                                  tooltip: _currentLanguage == 'am' ? 'ጨምር' : 'Increase',
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
                     ),
                   ),
                 ],
@@ -616,25 +544,25 @@ class _HomePageState extends State<HomePage> {
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 12),
-                    ...plan.prayerTopics.map((topic) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              topic,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: isDark ? Colors.white70 : Colors.black87,
-                              ),
-                            ),
+                    // Numbered title list
+                    ...List.generate(plan.prayerTopics.length, (i) {
+                      final topic = plan.prayerTopics[i];
+                      final prayerIndex = PrayerDataService.getPrayerIndexFromTopic(topic);
+                      final title = prayerIndex != null
+                          ? (PrayerDataService.getTitle(prayerIndex, _currentLanguage) ?? topic)
+                          : topic;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          '${i + 1}. $title',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark ? Colors.white70 : Colors.black87,
                           ),
-                        ],
-                      ),
-                    )),
-                    // Add spacing to ensure content is scrollable for refresh
-                    const SizedBox(height: 24),
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: 8),
                   ] else ...[
                     // Monday-Saturday - Psalm chapters
                     Text(
@@ -702,6 +630,38 @@ class _HomePageState extends State<HomePage> {
                       ),
                       textAlign: TextAlign.center,
                     ),
+                    if (PsalmAudioService.instance.isAvailable &&
+                        plan.chapters.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          PsalmPlayButton(
+                            from: plan.chapters.first,
+                            to: plan.chapters.last,
+                            iconSize: 34,
+                            color: isDark ? Colors.white : Colors.deepPurple,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _currentLanguage == 'am'
+                                ? 'ሁሉንም አዳምጥ (${plan.chapters.first}-${plan.chapters.last})'
+                                : 'Listen to all (${plan.chapters.first}-${plan.chapters.last})',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: isDark ? Colors.white : Colors.deepPurple,
+                            ),
+                          ),
+                        ],
+                      ),
+                      PsalmSeekBar(
+                        from: plan.chapters.first,
+                        to: plan.chapters.last,
+                        color: isDark ? Colors.white : Colors.deepPurple,
+                        textColor: isDark ? Colors.white60 : Colors.black54,
+                      ),
+                    ],
                     const SizedBox(height: 12),
                   ],
                 ],
@@ -715,8 +675,65 @@ class _HomePageState extends State<HomePage> {
           
           // Removed action buttons (moved to Drawer)
           // Quick access: show today's psalms snippets
-          // For Sunday, add extra spacing at bottom to ensure refresh works
-          if (plan.isSunday) const SizedBox(height: 100),
+          // Sunday: prayer cards (same style as psalm cards)
+          if (plan.isSunday)
+            ...plan.prayerTopics.map((topic) {
+              final prayerIndex = PrayerDataService.getPrayerIndexFromTopic(topic);
+              final hasPrayerText = prayerIndex != null && PrayerDataService.hasPrayer(prayerIndex);
+              final title = prayerIndex != null
+                  ? (PrayerDataService.getTitle(prayerIndex, _currentLanguage) ?? topic)
+                  : topic;
+              final content = hasPrayerText ? PrayerDataService.getPrayer(prayerIndex!) ?? '' : '';
+              final preview = _firstVersesPreview(content, 3);
+              return Padding(
+                padding: const EdgeInsets.only(top: 12.0),
+                child: Card(
+                  elevation: 1,
+                  color: isDark ? Colors.grey.shade900 : null,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.church, color: isDark ? Colors.white : Colors.deepPurple),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            if (hasPrayerText)
+                              TextButton(
+                                onPressed: () => _openPrayerViewer(prayerIndex!, title),
+                                child: Text(
+                                  _currentLanguage == 'am' ? 'ክፈት' : 'Open',
+                                  style: TextStyle(color: isDark ? Colors.white : Colors.deepPurple),
+                                ),
+                              ),
+                          ],
+                        ),
+                        if (preview.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          ValueListenableBuilder<double>(
+                            valueListenable: FontSizeService.instance.fontSize,
+                            builder: (context, fontSize, _) {
+                              return Text(
+                                preview,
+                                style: GoogleFonts.notoSerifEthiopic(fontSize: fontSize, height: 1.6),
+                              );
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          // Weekday: psalm cards
           ...plan.chapters.map((ch) {
             final lang = _currentLanguage;
             final isAm = lang == 'am';
@@ -743,6 +760,13 @@ class _HomePageState extends State<HomePage> {
                               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                             ),
                           ),
+                          if (PsalmAudioService.instance.isAvailable)
+                            PsalmPlayButton(
+                              from: ch,
+                              to: ch,
+                              iconSize: 26,
+                              color: isDark ? Colors.white : Colors.deepPurple,
+                            ),
                           TextButton(
                             onPressed: () {
                               Navigator.of(context).push(
@@ -758,6 +782,13 @@ class _HomePageState extends State<HomePage> {
                           )
                         ],
                       ),
+                      if (PsalmAudioService.instance.isAvailable)
+                        PsalmSeekBar(
+                          from: ch,
+                          to: ch,
+                          color: isDark ? Colors.white : Colors.deepPurple,
+                          textColor: isDark ? Colors.white60 : Colors.black54,
+                        ),
                       const SizedBox(height: 8),
                       ValueListenableBuilder<double>(
                         valueListenable: FontSizeService.instance.fontSize,
@@ -777,6 +808,16 @@ class _HomePageState extends State<HomePage> {
             );
           }),
         ],
+      ),
+    );
+  }
+
+  void _openPrayerViewer(int prayerIndex, String title) {
+    final text = PrayerDataService.getPrayer(prayerIndex);
+    if (text == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => _PrayerViewerPage(title: title, text: text),
       ),
     );
   }
@@ -802,5 +843,160 @@ class _HomePageState extends State<HomePage> {
       // Show all verses: do not limit by count
     }
     return verses.join('\n');
+  }
+}
+
+/// Prayer viewer page matching the psalm viewer style
+class _PrayerViewerPage extends StatefulWidget {
+  final String title;
+  final String text;
+
+  const _PrayerViewerPage({required this.title, required this.text});
+
+  @override
+  State<_PrayerViewerPage> createState() => _PrayerViewerPageState();
+}
+
+class _PrayerViewerPageState extends State<_PrayerViewerPage> {
+  final Set<int> _visibleVerseNumbers = <int>{};
+
+  List<MapEntry<int, String>> _parseVerses(String content) {
+    final List<MapEntry<int, String>> verses = [];
+    final lines = content.split('\n');
+    final reg = RegExp(r'^(\d+)\s+(.*)');
+    for (final line in lines) {
+      final m = reg.firstMatch(line.trim());
+      if (m != null) {
+        final num = int.tryParse(m.group(1)!);
+        final txt = m.group(2)!.trim();
+        if (num != null) {
+          verses.add(MapEntry(num, txt));
+        }
+      } else {
+        if (verses.isNotEmpty) {
+          final last = verses.removeLast();
+          verses.add(MapEntry(last.key, '${last.value} ${line.trim()}'.trim()));
+        } else if (line.trim().isNotEmpty) {
+          verses.add(MapEntry(0, line.trim()));
+        }
+      }
+    }
+    return verses;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final verses = _parseVerses(widget.text);
+
+    return Scaffold(
+      backgroundColor: isDark ? Colors.black87 : null,
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Card(
+            elevation: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.grey.shade900 : Colors.deepPurple.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isDark ? Colors.grey.shade700 : Colors.deepPurple.shade200,
+                      ),
+                    ),
+                    child: Text(
+                      widget.title,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.deepPurple,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // Verses
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.black : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: verses.map((e) {
+                        final verseNum = e.key;
+                        final showNum = verseNum != 0 && _visibleVerseNumbers.contains(verseNum);
+                        return ValueListenableBuilder<double>(
+                          valueListenable: FontSizeService.instance.fontSize,
+                          builder: (context, fontSize, _) {
+                            final bodyStyle = GoogleFonts.notoSerifEthiopic(
+                              fontSize: fontSize,
+                              height: 1.6,
+                              color: isDark ? Colors.white : Colors.black87,
+                            );
+                            final numStyle = GoogleFonts.notoSerifEthiopic(
+                              fontSize: fontSize * 0.875,
+                              height: 1.6,
+                              color: isDark ? Colors.white70 : Colors.grey.shade700,
+                            );
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: InkWell(
+                                onTap: () {
+                                  if (verseNum == 0) return;
+                                  setState(() {
+                                    if (_visibleVerseNumbers.contains(verseNum)) {
+                                      _visibleVerseNumbers.remove(verseNum);
+                                    } else {
+                                      _visibleVerseNumbers.add(verseNum);
+                                    }
+                                  });
+                                },
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: showNum ? 28 : 0,
+                                      child: showNum
+                                          ? Text(
+                                              verseNum.toString(),
+                                              textAlign: TextAlign.right,
+                                              style: numStyle,
+                                            )
+                                          : const SizedBox.shrink(),
+                                    ),
+                                    SizedBox(width: showNum ? 8 : 0),
+                                    Expanded(
+                                      child: Text(e.value, style: bodyStyle),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
